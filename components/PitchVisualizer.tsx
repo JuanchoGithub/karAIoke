@@ -8,7 +8,22 @@ interface PitchVisualizerProps {
   notes: Note[];
   isPlaying: boolean;
   difficultyMode: Difficulty;
-  processingTimeMs?: number; // New prop for profiling
+  processingTimeMs?: number;
+}
+
+interface Particle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  color: string;
+}
+
+interface PitchPoint {
+  time: number;
+  midi: number;
+  isHitting: boolean;
 }
 
 const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
@@ -20,9 +35,14 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
   processingTimeMs = 0
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  
   // Profiling Refs
   const fpsRef = useRef(0);
   const lastFrameTimeRef = useRef(0);
+  
+  // Visual Effect Refs
+  const particlesRef = useRef<Particle[]>([]);
+  const pitchHistoryRef = useRef<PitchPoint[]>([]);
 
   // Calculate Dynamic Pitch Range
   const { minPitch, maxPitch } = useMemo(() => {
@@ -40,7 +60,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
     min -= 4;
     max += 4;
     
-    // Ensure minimum range (at least 1.5 octaves = 18 semitones) to avoid extreme zoom on monotonic songs
+    // Ensure minimum range (at least 1.5 octaves = 18 semitones)
     if (max - min < 18) {
         const center = (max + min) / 2;
         min = center - 9;
@@ -52,7 +72,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
 
   const PITCH_RANGE = maxPitch - minPitch;
   const VISIBLE_WINDOW = 4; // seconds visible on screen
-  const NOTE_HEIGHT = 12;
+  const NOTE_HEIGHT = 16;   // Slightly thicker notes
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -73,21 +93,18 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
       const currentTime = currentTimeRef.current;
       const userPitch = userPitchRef.current;
 
-      // Optimization: Access clientWidth/Height which causes less layout thrashing than getBoundingClientRect
+      // Handle Resize
       const dpr = window.devicePixelRatio || 1;
       const displayWidth = canvas.clientWidth;
       const displayHeight = canvas.clientHeight;
-      
       const targetWidth = Math.floor(displayWidth * dpr);
       const targetHeight = Math.floor(displayHeight * dpr);
 
-      // Only resize buffer if dimensions change
       if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
         canvas.width = targetWidth;
         canvas.height = targetHeight;
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       } else {
-        // Reset transform if not resizing, to ensure scale is correct for this frame
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
 
@@ -106,18 +123,15 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
         return hitLineX + (timeDiff * pixelsPerSecond);
       };
 
-      // Clear the canvas to be transparent
+      // Clear Canvas
       ctx.clearRect(0, 0, width, height);
 
-      // Draw Background Grid (Pitch Lines)
-      ctx.strokeStyle = 'rgba(51, 65, 85, 0.5)'; // Transparent slate
+      // --- 1. Background Grid ---
+      ctx.strokeStyle = 'rgba(51, 65, 85, 0.3)';
       ctx.lineWidth = 1;
-      
+      ctx.beginPath();
       const startPitch = Math.floor(minPitch);
       const endPitch = Math.ceil(maxPitch);
-
-      // Batch drawing lines
-      ctx.beginPath();
       for (let i = startPitch; i <= endPitch; i++) {
         const y = getY(i);
         const isC = i % 12 === 0;
@@ -129,33 +143,32 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
       }
       ctx.stroke();
 
-      // Highlight Octaves
+      // Note Labels (Octaves)
       ctx.beginPath();
-      ctx.strokeStyle = 'rgba(71, 85, 105, 0.8)';
+      ctx.strokeStyle = 'rgba(71, 85, 105, 0.6)';
       ctx.lineWidth = 2;
       for (let i = startPitch; i <= endPitch; i++) {
          if (i % 12 === 0) {
             const y = getY(i);
             ctx.moveTo(0, y);
             ctx.lineTo(width, y);
-            // Draw Label
-            ctx.fillStyle = '#94a3b8';
+            ctx.fillStyle = 'rgba(148, 163, 184, 0.5)';
             ctx.font = '10px Inter';
             ctx.fillText(midiToNoteName(i), 5, y - 2);
          }
       }
       ctx.stroke();
 
-      // Draw "Hit Line"
+      // --- 2. Hit Line ---
       const hitLineX = width * 0.2;
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(hitLineX, 0);
       ctx.lineTo(hitLineX, height);
       ctx.stroke();
 
-      // Find active notes
+      // --- 3. Draw Notes ---
       let activeNotes: Note[] = [];
 
       notes.forEach(note => {
@@ -164,93 +177,177 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
           return;
         }
 
-        if (currentTime >= note.startTime && currentTime <= note.startTime + note.duration) {
-            activeNotes.push(note);
-        }
+        const isActive = currentTime >= note.startTime && currentTime <= note.startTime + note.duration;
+        if (isActive) activeNotes.push(note);
 
         const x = getX(note.startTime);
         const w = (note.duration * (width / VISIBLE_WINDOW));
         const y = getY(note.pitch);
         
-        const isActive = currentTime >= note.startTime && currentTime <= note.startTime + note.duration;
+        // Draw Note Bar
+        ctx.fillStyle = isActive ? '#3b82f6' : '#475569';
         
-        ctx.fillStyle = isActive ? '#3b82f6' : '#64748b';
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 1.5;
-        
-        ctx.beginPath();
-        ctx.rect(x, y, w, NOTE_HEIGHT); // Use simple rect for performance
-        ctx.fill();
-        ctx.stroke();
+        // Glow effect for active notes
+        if (isActive) {
+            ctx.shadowColor = '#60a5fa';
+            ctx.shadowBlur = 15;
+        } else {
+            ctx.shadowBlur = 0;
+        }
 
+        // Rounded rect look
+        ctx.beginPath();
+        ctx.roundRect(x, y, Math.max(w, 4), NOTE_HEIGHT, 4);
+        ctx.fill();
+        ctx.shadowBlur = 0; // reset
+
+        // Lyrics
         if (note.lyric) {
-            ctx.fillStyle = '#fff';
-            ctx.font = 'bold 12px Inter';
-            ctx.fillText(note.lyric, x, y - 8);
+            ctx.fillStyle = isActive ? '#fff' : '#cbd5e1';
+            ctx.font = isActive ? 'bold 14px Inter' : 'bold 12px Inter';
+            const textWidth = ctx.measureText(note.lyric).width;
+            // Center lyric if note is small, or left align if long
+            const textX = w > textWidth ? x + (w - textWidth) / 2 : x;
+            ctx.fillText(note.lyric, textX, y - 8);
         }
       });
 
-      // Draw User Pitch Indicator
+      // --- 4. User Pitch Processing & History ---
+      let userMidi = 0;
+      let isHitting = false;
+
       if (userPitch > 0) {
-        let userMidi = 12 * Math.log2(userPitch / 440) + 69;
-        let isHitting = false;
-        
-        if (activeNotes.length > 0) {
-            let closestNote = activeNotes[0];
+         userMidi = 12 * Math.log2(userPitch / 440) + 69;
+         
+         // Determine hit status for color/particles
+         if (activeNotes.length > 0) {
+            // Find closest active note
             let minDiff = Infinity;
-            
-            // Just find closest active note (simplified for visual)
+            let closestNote = activeNotes[0];
             activeNotes.forEach(note => {
                const diff = Math.abs(userMidi - note.pitch);
-               if (diff < minDiff) {
-                 minDiff = diff;
-                 closestNote = note;
-               }
+               if (diff < minDiff) { minDiff = diff; closestNote = note; }
             });
 
-            if (minDiff < 2.0) {
+            // Tolerance check
+            if (minDiff < 1.5) {
                 isHitting = true;
             } else if (difficultyMode === 'Novice') {
+                // Check octaves
                 const diffDown = Math.abs((userMidi + 12) - closestNote.pitch);
                 const diffUp = Math.abs((userMidi - 12) - closestNote.pitch);
-                if (diffDown < 2.0) { userMidi += 12; isHitting = true; }
-                else if (diffUp < 2.0) { userMidi -= 12; isHitting = true; }
+                if (diffDown < 1.5) { userMidi += 12; isHitting = true; }
+                else if (diffUp < 1.5) { userMidi -= 12; isHitting = true; }
             }
-        }
-        
-        const y = getY(userMidi);
-        const x = hitLineX;
+         }
 
-        ctx.beginPath();
-        ctx.arc(x, y, 8, 0, Math.PI * 2);
-        
-        // Simple glow effect using color change instead of expensive shadowBlur
-        ctx.fillStyle = isHitting ? '#22c55e' : '#ef4444'; 
-        ctx.fill();
-        
-        // Ring for hit confirmation
-        if (isHitting) {
-            ctx.strokeStyle = '#86efac';
-            ctx.lineWidth = 2;
-            ctx.stroke();
-        }
+         // Add to History
+         pitchHistoryRef.current.push({
+             time: currentTime,
+             midi: userMidi,
+             isHitting
+         });
       }
 
-      // Draw FPS & Profiler
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
-      ctx.fillRect(0, 0, 180, 40);
+      // Prune History (Keep last 2 seconds)
+      const cutoffTime = currentTime - 2.0;
+      while(pitchHistoryRef.current.length > 0 && pitchHistoryRef.current[0].time < cutoffTime) {
+          pitchHistoryRef.current.shift();
+      }
+
+      // --- 5. Draw Pitch Trail ---
+      if (pitchHistoryRef.current.length > 1) {
+          ctx.lineWidth = 3;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          
+          for (let i = 1; i < pitchHistoryRef.current.length; i++) {
+              const p1 = pitchHistoryRef.current[i-1];
+              const p2 = pitchHistoryRef.current[i];
+              
+              // Don't connect large time gaps
+              if (p2.time - p1.time > 0.1) continue;
+
+              const x1 = getX(p1.time);
+              const y1 = getY(p1.midi);
+              const x2 = getX(p2.time);
+              const y2 = getY(p2.midi);
+
+              ctx.beginPath();
+              ctx.strokeStyle = p2.isHitting ? 'rgba(74, 222, 128, 0.8)' : 'rgba(148, 163, 184, 0.5)';
+              ctx.moveTo(x1, y1 + NOTE_HEIGHT/2); // Center of note height
+              ctx.lineTo(x2, y2 + NOTE_HEIGHT/2);
+              ctx.stroke();
+          }
+      }
+
+      // --- 6. Particles (Sparkles) ---
+      // Update & Draw
+      particlesRef.current.forEach(p => {
+          p.x += p.vx;
+          p.y += p.vy;
+          p.life -= 0.04; // Fade out speed
+          
+          if (p.life > 0) {
+              ctx.globalAlpha = p.life;
+              ctx.fillStyle = p.color;
+              ctx.beginPath();
+              ctx.arc(p.x, p.y, 2 + (p.life * 2), 0, Math.PI * 2);
+              ctx.fill();
+          }
+      });
+      // Remove dead particles
+      particlesRef.current = particlesRef.current.filter(p => p.life > 0);
+      ctx.globalAlpha = 1.0;
+
+
+      // --- 7. Draw Current Pitch Cursor ---
+      if (userPitch > 0) {
+        const y = getY(userMidi) + NOTE_HEIGHT/2;
+        const x = hitLineX;
+
+        // Spawn Particles if hitting
+        if (isHitting && Math.random() < 0.3) { // Limit spawn rate
+             particlesRef.current.push({
+                 x: x,
+                 y: y,
+                 vx: (Math.random() - 0.5) * 6,
+                 vy: (Math.random() - 0.5) * 6,
+                 life: 1.0,
+                 color: '#4ade80' // Green sparks
+             });
+        }
+
+        // Glow Effect
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = isHitting ? '#4ade80' : '#ef4444';
+        
+        ctx.beginPath();
+        ctx.fillStyle = isHitting ? '#22c55e' : '#ef4444';
+        ctx.arc(x, y, 6, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Inner white core
+        ctx.fillStyle = '#ffffff';
+        ctx.shadowBlur = 0;
+        ctx.beginPath();
+        ctx.arc(x, y, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+
+      // --- Debug UI ---
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.6)';
+      ctx.roundRect(0, 0, 160, 40, 8);
+      ctx.fill();
       
-      ctx.fillStyle = fpsRef.current < 30 ? '#ef4444' : '#22c55e';
+      ctx.fillStyle = fpsRef.current < 45 ? '#f87171' : '#4ade80';
       ctx.font = '10px monospace';
-      ctx.fillText(`FPS: ${Math.round(fpsRef.current)}`, 5, 14);
+      ctx.fillText(`FPS: ${Math.round(fpsRef.current)}`, 10, 15);
       
-      ctx.fillStyle = processingTimeMs > 4 ? '#ef4444' : '#94a3b8';
-      ctx.fillText(`CPU: ${processingTimeMs.toFixed(2)}ms`, 60, 14);
-
-      ctx.fillStyle = '#94a3b8';
-      ctx.fillText(`Time: ${currentTime.toFixed(2)}s`, 5, 28);
-
-
+      ctx.fillStyle = processingTimeMs > 8 ? '#f87171' : '#94a3b8';
+      ctx.fillText(`Audio CPU: ${processingTimeMs.toFixed(2)}ms`, 10, 28);
+      
       if (isPlaying) {
         animationId = requestAnimationFrame(render);
       }
