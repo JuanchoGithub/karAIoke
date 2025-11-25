@@ -18,7 +18,9 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
   difficultyMode
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const particlesRef = useRef<{x: number, y: number, life: number, color: string}[]>([]);
+  // Profiling Refs
+  const fpsRef = useRef(0);
+  const lastFrameTimeRef = useRef(0);
 
   // Calculate Dynamic Pitch Range
   const { minPitch, maxPitch } = useMemo(() => {
@@ -53,13 +55,19 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    // CRITICAL FIX: alpha: true allows the video background to show through the canvas
     const ctx = canvas.getContext('2d', { alpha: true }); 
     if (!ctx) return;
 
     let animationId: number;
 
-    const render = () => {
+    const render = (now: number) => {
+      // FPS Calculation
+      if (lastFrameTimeRef.current !== 0) {
+        const delta = now - lastFrameTimeRef.current;
+        fpsRef.current = 1000 / delta;
+      }
+      lastFrameTimeRef.current = now;
+
       const currentTime = currentTimeRef.current;
       const userPitch = userPitchRef.current;
 
@@ -169,11 +177,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
         ctx.lineWidth = 1.5;
         
         ctx.beginPath();
-        if (ctx.roundRect) {
-            ctx.roundRect(x, y, w, NOTE_HEIGHT, 4);
-        } else {
-            ctx.rect(x, y, w, NOTE_HEIGHT);
-        }
+        ctx.rect(x, y, w, NOTE_HEIGHT); // Use simple rect for performance
         ctx.fill();
         ctx.stroke();
 
@@ -193,6 +197,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
             let closestNote = activeNotes[0];
             let minDiff = Infinity;
             
+            // Just find closest active note (simplified for visual)
             activeNotes.forEach(note => {
                const diff = Math.abs(userMidi - note.pitch);
                if (diff < minDiff) {
@@ -206,13 +211,8 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
             } else if (difficultyMode === 'Novice') {
                 const diffDown = Math.abs((userMidi + 12) - closestNote.pitch);
                 const diffUp = Math.abs((userMidi - 12) - closestNote.pitch);
-                const diffDown2 = Math.abs((userMidi + 24) - closestNote.pitch); 
-                const diffUp2 = Math.abs((userMidi - 24) - closestNote.pitch);
-
                 if (diffDown < 2.0) { userMidi += 12; isHitting = true; }
                 else if (diffUp < 2.0) { userMidi -= 12; isHitting = true; }
-                else if (diffDown2 < 2.0) { userMidi += 24; isHitting = true; }
-                else if (diffUp2 < 2.0) { userMidi -= 24; isHitting = true; }
             }
         }
         
@@ -221,38 +221,25 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
 
         ctx.beginPath();
         ctx.arc(x, y, 8, 0, Math.PI * 2);
+        
+        // Simple glow effect using color change instead of expensive shadowBlur
         ctx.fillStyle = isHitting ? '#22c55e' : '#ef4444'; 
         ctx.fill();
         
-        // PERFORMANCE FIX: Removed shadowBlur. It causes massive lag on many devices.
-        // ctx.shadowBlur = 10;
-        
-        if (isHitting && Math.random() > 0.5) {
-            particlesRef.current.push({ x, y, life: 1.0, color: '#22c55e' });
+        // Ring for hit confirmation
+        if (isHitting) {
+            ctx.strokeStyle = '#86efac';
+            ctx.lineWidth = 2;
+            ctx.stroke();
         }
       }
 
-      // Draw Particles
-      if (particlesRef.current.length > 0) {
-        for (let i = particlesRef.current.length - 1; i >= 0; i--) {
-            const p = particlesRef.current[i];
-            p.life -= 0.05;
-            p.x -= 3;
-            p.y += (Math.random() - 0.5) * 4;
-            
-            if (p.life <= 0) {
-                particlesRef.current.splice(i, 1);
-                continue;
-            }
-
-            ctx.globalAlpha = p.life;
-            ctx.fillStyle = p.color;
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-            ctx.fill();
-        }
-        ctx.globalAlpha = 1.0;
-      }
+      // Draw FPS
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, 60, 20);
+      ctx.fillStyle = '#22c55e';
+      ctx.font = '10px monospace';
+      ctx.fillText(`FPS: ${Math.round(fpsRef.current)}`, 5, 14);
 
       if (isPlaying) {
         animationId = requestAnimationFrame(render);
@@ -260,7 +247,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
     };
 
     if (isPlaying) {
-        render();
+        requestAnimationFrame(render);
     }
 
     return () => {

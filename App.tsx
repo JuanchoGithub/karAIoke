@@ -8,6 +8,14 @@ import { parseUltraStarTxt } from './services/ultraStarParser';
 import PitchVisualizer from './components/PitchVisualizer';
 import AudienceMeter from './components/AudienceMeter';
 
+// Declare YouTube API types
+declare global {
+  interface Window {
+    onYouTubeIframeAPIReady: () => void;
+    YT: any;
+  }
+}
+
 const App: React.FC = () => {
   // State
   const [status, setStatus] = useState<GameStatus>(GameStatus.IDLE);
@@ -17,6 +25,7 @@ const App: React.FC = () => {
   const [songData, setSongData] = useState<SongData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isMicReady, setIsMicReady] = useState(false);
+  const [isVideoReady, setIsVideoReady] = useState(false); // New state for video player
   
   // Settings
   const [difficultyMode, setDifficultyMode] = useState<Difficulty>('Novice');
@@ -26,10 +35,8 @@ const App: React.FC = () => {
   const [manualTxt, setManualTxt] = useState('');
 
   // Game Logic State (Refs for performance)
-  // We use Refs for data that changes 60 times a second to avoid Re-renders.
   const currentTimeRef = useRef(0);
   const userPitchRef = useRef(0);
-  const startTimeRef = useRef(0);
   
   // Internal Score State (Real-time)
   const scoreLogicStateRef = useRef<ScoreState>({
@@ -55,8 +62,11 @@ const App: React.FC = () => {
   const audioBufferRef = useRef<Float32Array | null>(null);
 
   const requestRef = useRef<number | null>(null);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
   const frameCountRef = useRef(0);
+  
+  // YouTube Player Refs
+  const playerRef = useRef<any>(null);
+  const playerContainerRef = useRef<HTMLDivElement>(null);
 
   // --- Audio Handling (Microphone) ---
   const startMicrophone = async () => {
@@ -101,15 +111,76 @@ const App: React.FC = () => {
     setIsMicReady(false);
   };
 
+  // --- YouTube Player Logic ---
+  const loadYouTubeApi = useCallback(() => {
+    if (window.YT && window.YT.Player) return; // Already loaded
+    const tag = document.createElement('script');
+    tag.src = "https://www.youtube.com/iframe_api";
+    const firstScriptTag = document.getElementsByTagName('script')[0];
+    firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
+  }, []);
+
+  const initializePlayer = useCallback((videoId: string) => {
+    setIsVideoReady(false);
+    
+    const onPlayerReady = (event: any) => {
+      event.target.playVideo();
+    };
+
+    const onPlayerStateChange = (event: any) => {
+      // YT.PlayerState.PLAYING = 1
+      if (event.data === 1) {
+        setIsVideoReady(true);
+      }
+      // YT.PlayerState.BUFFERING = 3
+      if (event.data === 3) {
+         // Optionally handle buffering visual
+      }
+    };
+
+    if (window.YT && window.YT.Player) {
+      playerRef.current = new window.YT.Player('youtube-player', {
+        height: '100%',
+        width: '100%',
+        videoId: videoId,
+        playerVars: {
+          'autoplay': 1,
+          'controls': 0,
+          'rel': 0,
+          'showinfo': 0,
+          'modestbranding': 1,
+          'playsinline': 1,
+          'disablekb': 1,
+          'fs': 0,
+          'iv_load_policy': 3
+        },
+        events: {
+          'onReady': onPlayerReady,
+          'onStateChange': onPlayerStateChange
+        }
+      });
+    }
+  }, []);
+
   // --- Game Loop ---
   // Optimized to NOT cause re-renders
   const updateGame = useCallback(() => {
     if (status !== GameStatus.PLAYING || !songData) return;
 
     // 1. Update Time
-    const now = Date.now();
-    const rawElapsed = (now - startTimeRef.current) / 1000;
-    const calculatedTime = rawElapsed + audioDelay;
+    // SYNC FIX: Trust the video player time instead of Date.now()
+    // This handles buffering automatically.
+    let currentTime = 0;
+    if (playerRef.current && playerRef.current.getCurrentTime) {
+        const videoTime = playerRef.current.getCurrentTime();
+        // Fallback if videoTime is 0 or invalid initially
+        if (typeof videoTime === 'number') {
+            currentTime = videoTime;
+        }
+    }
+    
+    // Apply user manual offset
+    const calculatedTime = currentTime + audioDelay;
     
     // Update Ref (No render)
     currentTimeRef.current = calculatedTime;
@@ -134,55 +205,58 @@ const App: React.FC = () => {
     }
 
     // 3. Scoring Logic
-    const userPitch = userPitchRef.current;
-    const userMidi = frequencyToMidi(userPitch);
-    const activeNote = songData.notes.find(n => calculatedTime >= n.startTime && calculatedTime <= n.startTime + n.duration);
-    
-    const s = scoreLogicStateRef.current;
-
-    if (activeNote) {
-      if (userPitch > 0) {
-        let diff = Math.abs(userMidi - activeNote.pitch);
-
-        // Novice Mode Tolerance
-        if (difficultyMode === 'Novice') {
-             const diffOctaveDown = Math.abs((userMidi + 12) - activeNote.pitch);
-             const diffOctaveUp = Math.abs((userMidi - 12) - activeNote.pitch);
-             const diffOctaveDown2 = Math.abs((userMidi + 24) - activeNote.pitch);
-             const diffOctaveUp2 = Math.abs((userMidi - 24) - activeNote.pitch);
-             diff = Math.min(diff, diffOctaveDown, diffOctaveUp, diffOctaveDown2, diffOctaveUp2);
-        }
+    // Only score if the video is actually running/ready
+    if (isVideoReady) {
+        const userPitch = userPitchRef.current;
+        const userMidi = frequencyToMidi(userPitch);
+        const activeNote = songData.notes.find(n => calculatedTime >= n.startTime && calculatedTime <= n.startTime + n.duration);
         
-        if (diff < 1.5) {
-            s.currentScore += 10 + (s.combo * 2);
-            s.combo += 1;
-            s.perfectHits += 1;
-            s.audienceMood = Math.min(100, s.audienceMood + 0.5);
-        } else if (diff < 3.0) {
-            s.currentScore += 5;
-            s.combo += 1;
-            s.goodHits += 1;
-            s.audienceMood = Math.min(100, s.audienceMood + 0.1);
+        const s = scoreLogicStateRef.current;
+
+        if (activeNote) {
+        if (userPitch > 0) {
+            let diff = Math.abs(userMidi - activeNote.pitch);
+
+            // Novice Mode Tolerance
+            if (difficultyMode === 'Novice') {
+                const diffOctaveDown = Math.abs((userMidi + 12) - activeNote.pitch);
+                const diffOctaveUp = Math.abs((userMidi - 12) - activeNote.pitch);
+                const diffOctaveDown2 = Math.abs((userMidi + 24) - activeNote.pitch);
+                const diffOctaveUp2 = Math.abs((userMidi - 24) - activeNote.pitch);
+                diff = Math.min(diff, diffOctaveDown, diffOctaveUp, diffOctaveDown2, diffOctaveUp2);
+            }
+            
+            if (diff < 1.5) {
+                s.currentScore += 10 + (s.combo * 2);
+                s.combo += 1;
+                s.perfectHits += 1;
+                s.audienceMood = Math.min(100, s.audienceMood + 0.5);
+            } else if (diff < 3.0) {
+                s.currentScore += 5;
+                s.combo += 1;
+                s.goodHits += 1;
+                s.audienceMood = Math.min(100, s.audienceMood + 0.1);
+            } else {
+                s.combo = 0;
+                s.misses += 1;
+                s.audienceMood = Math.max(0, s.audienceMood - 0.2);
+            }
         } else {
-             s.combo = 0;
-             s.misses += 1;
-             s.audienceMood = Math.max(0, s.audienceMood - 0.2);
+            s.audienceMood = Math.max(0, s.audienceMood - 0.05);
         }
-      } else {
-           s.audienceMood = Math.max(0, s.audienceMood - 0.05);
-      }
+        }
+        s.maxCombo = Math.max(s.maxCombo, s.combo);
     }
-    s.maxCombo = Math.max(s.maxCombo, s.combo);
 
     // 4. Update UI Throttle
     // Only trigger React State update every 10 frames (approx 6 times a second)
     frameCountRef.current += 1;
     if (frameCountRef.current % 10 === 0) {
-        setScoreDisplayState({ ...s });
+        setScoreDisplayState({ ...scoreLogicStateRef.current });
     }
 
     requestRef.current = requestAnimationFrame(updateGame);
-  }, [status, songData, audioDelay, difficultyMode]);
+  }, [status, songData, audioDelay, difficultyMode, isVideoReady]);
 
   useEffect(() => {
     if (status === GameStatus.PLAYING) {
@@ -194,6 +268,33 @@ const App: React.FC = () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
   }, [status, updateGame]);
+
+  // Init YouTube API on mount
+  useEffect(() => {
+    window.onYouTubeIframeAPIReady = () => {
+       console.log("YouTube API Ready");
+    };
+    loadYouTubeApi();
+  }, [loadYouTubeApi]);
+
+  // When entering PLAYING state, init player
+  useEffect(() => {
+    if (status === GameStatus.PLAYING && songData?.videoId) {
+        // Small timeout to ensure DOM element exists
+        setTimeout(() => {
+             initializePlayer(songData.videoId);
+        }, 100);
+    }
+    return () => {
+        if (playerRef.current && playerRef.current.destroy) {
+            try {
+                playerRef.current.destroy();
+            } catch(e) { /* ignore */ }
+            playerRef.current = null;
+        }
+        setIsVideoReady(false);
+    };
+  }, [status, songData, initializePlayer]);
 
   // Keyboard Shortcuts for Sync
   useEffect(() => {
@@ -300,7 +401,6 @@ const App: React.FC = () => {
     const micAccess = await startMicrophone();
     if (!micAccess) return;
 
-    startTimeRef.current = Date.now();
     currentTimeRef.current = 0;
     userPitchRef.current = 0;
     frameCountRef.current = 0;
@@ -329,6 +429,7 @@ const App: React.FC = () => {
     setSearchResults([]);
     setShowTxtPaste(false);
     setManualTxt('');
+    setIsVideoReady(false);
   };
 
   const goBackToSearch = () => {
@@ -456,17 +557,17 @@ const App: React.FC = () => {
         </div>
 
         {/* Sync Controls */}
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-4 bg-slate-900/80 backdrop-blur rounded-full px-4 py-2 border border-slate-700">
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-4 bg-slate-900/80 backdrop-blur rounded-full px-4 py-2 border border-slate-700 pointer-events-auto">
            <button onClick={() => setAudioDelay(d => d - 0.05)} className="p-1 hover:bg-slate-700 rounded-full text-slate-400 hover:text-white transition-colors"><Minus size={16} /></button>
-           <div className="flex flex-col items-center w-20">
-             <span className="text-[10px] uppercase font-bold text-slate-500">Sync Offset</span>
+           <div className="flex flex-col items-center w-24 cursor-help" title="If lyrics are ahead, press -. If lyrics are behind, press +">
+             <span className="text-[10px] uppercase font-bold text-slate-500">Video Offset</span>
              <span className={`text-xs font-mono font-bold ${audioDelay === 0 ? 'text-white' : 'text-blue-400'}`}>{audioDelay > 0 ? '+' : ''}{(audioDelay * 1000).toFixed(0)}ms</span>
            </div>
            <button onClick={() => setAudioDelay(d => d + 0.05)} className="p-1 hover:bg-slate-700 rounded-full text-slate-400 hover:text-white transition-colors"><Plus size={16} /></button>
         </div>
 
         {/* Audience Meter */}
-        <div className="absolute left-4 top-1/2 -translate-y-1/2 z-20">
+        <div className="absolute left-4 top-1/2 -translate-y-1/2 z-20 pointer-events-none">
             <AudienceMeter mood={scoreDisplayState.audienceMood} combo={scoreDisplayState.combo} />
         </div>
 
@@ -481,27 +582,27 @@ const App: React.FC = () => {
            />
         </div>
 
-        {/* Video Background */}
+        {/* Loading / Waiting for Video Overlay */}
+        {!isVideoReady && (
+            <div className="absolute inset-0 z-40 bg-black/90 flex flex-col items-center justify-center gap-4">
+                <Loader2 size={48} className="text-blue-500 animate-spin" />
+                <p className="text-white font-bold text-xl">Loading Video...</p>
+            </div>
+        )}
+
+        {/* Video Background - Uses Iframe API div */}
         <div className="absolute inset-0 z-0 bg-black">
-           {(songData.backgroundUrl || songData.coverUrl) && (
+           {(songData.backgroundUrl || songData.coverUrl) && !isVideoReady && (
               <div className="absolute inset-0 bg-cover bg-center opacity-40 z-0" style={{ backgroundImage: `url(${songData.backgroundUrl || songData.coverUrl})` }} />
            )}
-           {songData.videoId ? (
-             <iframe 
-              ref={iframeRef}
-              width="100%" height="100%" 
-              src={`https://www.youtube.com/embed/${songData.videoId}?autoplay=1&controls=0&rel=0`}
-              title="YouTube video player" 
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
-              referrerPolicy="strict-origin-when-cross-origin"
-              className="absolute inset-0 w-full h-full object-cover z-10 opacity-70 mix-blend-screen"
-             />
-           ) : (
-             <div className="absolute inset-0 flex items-center justify-center z-10 opacity-70"><p className="text-slate-500 font-bold">No Video Available</p></div>
-           )}
+           <div 
+             id="youtube-player" 
+             className="absolute inset-0 w-full h-full object-cover z-10 opacity-70 mix-blend-screen"
+             ref={playerContainerRef}
+           />
         </div>
 
-        <button onClick={resetGame} className="absolute bottom-6 right-6 z-30 bg-red-600/80 hover:bg-red-500 p-3 rounded-full text-white backdrop-blur-sm transition-all">
+        <button onClick={resetGame} className="absolute bottom-6 right-6 z-30 bg-red-600/80 hover:bg-red-500 p-3 rounded-full text-white backdrop-blur-sm transition-all pointer-events-auto">
           <div className="w-4 h-4 bg-white rounded-sm" />
         </button>
       </div>
