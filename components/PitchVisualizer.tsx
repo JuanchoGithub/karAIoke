@@ -8,6 +8,7 @@ interface PitchVisualizerProps {
   notes: Note[];
   isPlaying: boolean;
   difficultyMode: Difficulty;
+  processingTimeMs?: number; // New prop for profiling
 }
 
 const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
@@ -15,7 +16,8 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
   userPitchRef,
   notes,
   isPlaying,
-  difficultyMode
+  difficultyMode,
+  processingTimeMs = 0
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Profiling Refs
@@ -234,12 +236,20 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
         }
       }
 
-      // Draw FPS
-      ctx.fillStyle = '#0f172a';
-      ctx.fillRect(0, 0, 60, 20);
-      ctx.fillStyle = '#22c55e';
+      // Draw FPS & Profiler
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
+      ctx.fillRect(0, 0, 180, 40);
+      
+      ctx.fillStyle = fpsRef.current < 30 ? '#ef4444' : '#22c55e';
       ctx.font = '10px monospace';
       ctx.fillText(`FPS: ${Math.round(fpsRef.current)}`, 5, 14);
+      
+      ctx.fillStyle = processingTimeMs > 4 ? '#ef4444' : '#94a3b8';
+      ctx.fillText(`CPU: ${processingTimeMs.toFixed(2)}ms`, 60, 14);
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillText(`Time: ${currentTime.toFixed(2)}s`, 5, 28);
+
 
       if (isPlaying) {
         animationId = requestAnimationFrame(render);
@@ -253,7 +263,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
     return () => {
       cancelAnimationFrame(animationId);
     };
-  }, [notes, isPlaying, difficultyMode, minPitch, maxPitch, PITCH_RANGE]); 
+  }, [notes, isPlaying, difficultyMode, minPitch, maxPitch, PITCH_RANGE, processingTimeMs]); 
 
   return (
     <canvas 

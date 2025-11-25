@@ -37,6 +37,7 @@ const App: React.FC = () => {
   // Game Logic State (Refs for performance)
   const currentTimeRef = useRef(0);
   const userPitchRef = useRef(0);
+  const processingTimeRef = useRef(0); // Profiling ref
   
   // Internal Score State (Real-time)
   const scoreLogicStateRef = useRef<ScoreState>({
@@ -187,6 +188,8 @@ const App: React.FC = () => {
 
     // 2. Update Pitch
     if (analyserRef.current && audioContextRef.current) {
+        const t0 = performance.now(); // Start Profile
+
         // PERFORMANCE: Re-use the existing Float32Array
         if (!audioBufferRef.current) {
              audioBufferRef.current = new Float32Array(analyserRef.current.fftSize);
@@ -202,6 +205,9 @@ const App: React.FC = () => {
         } else {
            userPitchRef.current = 0;
         }
+        
+        const t1 = performance.now(); // End Profile
+        processingTimeRef.current = t1 - t0;
     }
 
     // 3. Scoring Logic
@@ -302,9 +308,9 @@ const App: React.FC = () => {
         if (status !== GameStatus.PLAYING) return;
         
         if (e.key === 'ArrowRight') {
-            setAudioDelay(prev => Math.min(prev + 0.05, 5.0));
+            setAudioDelay(prev => Math.min(prev + 0.1, 5.0)); // Increased step to 100ms
         } else if (e.key === 'ArrowLeft') {
-            setAudioDelay(prev => Math.max(prev - 0.05, -5.0));
+            setAudioDelay(prev => Math.max(prev - 0.1, -5.0)); // Increased step to 100ms
         }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -404,6 +410,7 @@ const App: React.FC = () => {
     currentTimeRef.current = 0;
     userPitchRef.current = 0;
     frameCountRef.current = 0;
+    processingTimeRef.current = 0;
     
     // Reset Score logic
     scoreLogicStateRef.current = {
@@ -558,12 +565,12 @@ const App: React.FC = () => {
 
         {/* Sync Controls */}
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-4 bg-slate-900/80 backdrop-blur rounded-full px-4 py-2 border border-slate-700 pointer-events-auto">
-           <button onClick={() => setAudioDelay(d => d - 0.05)} className="p-1 hover:bg-slate-700 rounded-full text-slate-400 hover:text-white transition-colors"><Minus size={16} /></button>
+           <button onClick={() => setAudioDelay(d => d - 0.1)} className="p-1 hover:bg-slate-700 rounded-full text-slate-400 hover:text-white transition-colors"><Minus size={16} /></button>
            <div className="flex flex-col items-center w-24 cursor-help" title="If lyrics are ahead, press -. If lyrics are behind, press +">
              <span className="text-[10px] uppercase font-bold text-slate-500">Video Offset</span>
              <span className={`text-xs font-mono font-bold ${audioDelay === 0 ? 'text-white' : 'text-blue-400'}`}>{audioDelay > 0 ? '+' : ''}{(audioDelay * 1000).toFixed(0)}ms</span>
            </div>
-           <button onClick={() => setAudioDelay(d => d + 0.05)} className="p-1 hover:bg-slate-700 rounded-full text-slate-400 hover:text-white transition-colors"><Plus size={16} /></button>
+           <button onClick={() => setAudioDelay(d => d + 0.1)} className="p-1 hover:bg-slate-700 rounded-full text-slate-400 hover:text-white transition-colors"><Plus size={16} /></button>
         </div>
 
         {/* Audience Meter */}
@@ -579,6 +586,7 @@ const App: React.FC = () => {
               notes={songData.notes}
               isPlaying={status === GameStatus.PLAYING}
               difficultyMode={difficultyMode}
+              processingTimeMs={processingTimeRef.current}
            />
         </div>
 
