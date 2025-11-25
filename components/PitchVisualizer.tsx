@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react';
-import { Note, ScoreState } from '../types';
+import React, { useEffect, useRef, useMemo } from 'react';
+import { Note, ScoreState, Difficulty } from '../types';
 import { midiToNoteName } from '../services/audioAnalysis';
 
 interface PitchVisualizerProps {
@@ -8,6 +8,7 @@ interface PitchVisualizerProps {
   notes: Note[];
   scoreState: ScoreState;
   isPlaying: boolean;
+  difficultyMode: Difficulty;
 }
 
 const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
@@ -15,24 +16,48 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
   userPitch,
   notes,
   scoreState,
-  isPlaying
+  isPlaying,
+  difficultyMode
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const particlesRef = useRef<{x: number, y: number, life: number, color: string}[]>([]);
 
-  // Configuration
+  // Calculate Dynamic Pitch Range
+  const { minPitch, maxPitch } = useMemo(() => {
+    if (notes.length === 0) return { minPitch: 45, maxPitch: 84 };
+    
+    let min = Infinity;
+    let max = -Infinity;
+    
+    notes.forEach(n => {
+        if (n.pitch < min) min = n.pitch;
+        if (n.pitch > max) max = n.pitch;
+    });
+
+    // Add padding (4 semitones on each side)
+    min -= 4;
+    max += 4;
+    
+    // Ensure minimum range (at least 1.5 octaves = 18 semitones) to avoid extreme zoom on monotonic songs
+    if (max - min < 18) {
+        const center = (max + min) / 2;
+        min = center - 9;
+        max = center + 9;
+    }
+
+    return { minPitch: min, maxPitch: max };
+  }, [notes]);
+
+  const PITCH_RANGE = maxPitch - minPitch;
   const VISIBLE_WINDOW = 4; // seconds visible on screen
   const NOTE_HEIGHT = 10;
-  const MIN_PITCH = 45; // F2
-  const MAX_PITCH = 84; // C6
-  const PITCH_RANGE = MAX_PITCH - MIN_PITCH;
 
   // Helper to map pitch to Y coordinate (inverted because canvas Y=0 is top)
   const getY = (midiPitch: number, height: number) => {
-    const normalized = (midiPitch - MIN_PITCH) / PITCH_RANGE;
-    // Clamp
-    const clamped = Math.max(0, Math.min(1, normalized));
-    return height - (clamped * height) - (NOTE_HEIGHT / 2);
+    const normalized = (midiPitch - minPitch) / PITCH_RANGE;
+    // Clamp to keep strictly within bounds for calculation, though drawing might overflow slightly
+    // but canvas handles off-screen draw fine.
+    return height - (normalized * height) - (NOTE_HEIGHT / 2);
   };
 
   // Helper to map time to X coordinate
@@ -69,13 +94,38 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
       // Draw Background Grid (Pitch Lines)
       ctx.strokeStyle = '#334155';
       ctx.lineWidth = 1;
-      for (let i = MIN_PITCH; i <= MAX_PITCH; i++) {
-        if (i % 12 === 0 || i % 12 === 5 || i % 12 === 7) { // Highlight C, F, G
-          const y = getY(i, height);
-          ctx.beginPath();
-          ctx.moveTo(0, y);
-          ctx.lineTo(width, y);
-          ctx.stroke();
+      
+      // Draw grid lines for relevant pitches
+      const startPitch = Math.floor(minPitch);
+      const endPitch = Math.ceil(maxPitch);
+
+      for (let i = startPitch; i <= endPitch; i++) {
+        const y = getY(i, height);
+        
+        // Highlight Octaves (C notes: 36, 48, 60, 72...)
+        const isC = i % 12 === 0;
+        
+        if (isC) {
+           ctx.strokeStyle = '#475569';
+           ctx.lineWidth = 2;
+        } else {
+           ctx.strokeStyle = '#1e293b';
+           ctx.lineWidth = 1;
+        }
+        
+        // Only draw semi-tones if zoomed in enough (range < 30)
+        if (PITCH_RANGE < 30 || isC || i % 12 === 5 || i % 12 === 7) {
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(width, y);
+            ctx.stroke();
+        }
+        
+        // Draw Note Labels for Cs
+        if (isC) {
+             ctx.fillStyle = '#475569';
+             ctx.font = '10px Inter';
+             ctx.fillText(midiToNoteName(i), 5, y - 2);
         }
       }
 
@@ -88,6 +138,11 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
       ctx.lineTo(hitLineX, height);
       ctx.stroke();
 
+      // Find active notes for "Snapping" logic
+      const activeNotes = notes.filter(n => 
+          currentTime >= n.startTime && currentTime <= n.startTime + n.duration
+      );
+
       // Draw Notes
       notes.forEach(note => {
         // Optimization: only draw notes within window + buffer
@@ -99,7 +154,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
         const w = (note.duration * (width / VISIBLE_WINDOW));
         const y = getY(note.pitch, height);
 
-        // Styling based on if it's being hit (this logic is simplified visual only, real logic is in parent)
+        // Styling based on active
         const isActive = currentTime >= note.startTime && currentTime <= note.startTime + note.duration;
         
         ctx.fillStyle = isActive ? '#3b82f6' : '#64748b'; // Blue active, Slate inactive
@@ -114,41 +169,76 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
         // Draw Lyric
         if (note.lyric) {
             ctx.fillStyle = '#fff';
-            ctx.font = '14px Inter';
-            ctx.fillText(note.lyric, x, y - 5);
+            ctx.font = 'bold 14px Inter';
+            // Prevent lyric overlap if zooming
+            ctx.fillText(note.lyric, x, y - 8);
         }
       });
 
       // Draw User Pitch Indicator
       if (userPitch > 0) {
         // Convert Hz to MIDI
-        const userMidi = 12 * Math.log2(userPitch / 440) + 69;
+        let userMidi = 12 * Math.log2(userPitch / 440) + 69;
+        
+        // --- Novice Mode: Octave Snapping Logic ---
+        // If Novice mode is on, checks if we are close to an active note in a DIFFERENT octave.
+        // If so, visually shift the user pointer to match the note's octave so it looks correct on screen.
+        let isHitting = false;
+        
+        if (activeNotes.length > 0) {
+            // Check against closest note
+            let closestNote = activeNotes[0];
+            let minDiff = Infinity;
+            
+            activeNotes.forEach(note => {
+               const diff = Math.abs(userMidi - note.pitch);
+               if (diff < minDiff) {
+                 minDiff = diff;
+                 closestNote = note;
+               }
+            });
+
+            // If strict hit
+            if (minDiff < 2.0) {
+                isHitting = true;
+            } 
+            // If strict hit fail, check octaves for Novice
+            else if (difficultyMode === 'Novice') {
+                const diffDown = Math.abs((userMidi + 12) - closestNote.pitch);
+                const diffUp = Math.abs((userMidi - 12) - closestNote.pitch);
+                const diffDown2 = Math.abs((userMidi + 24) - closestNote.pitch);
+                const diffUp2 = Math.abs((userMidi - 24) - closestNote.pitch);
+
+                if (diffDown < 2.0) {
+                    userMidi += 12; // Snap Visual
+                    isHitting = true;
+                } else if (diffUp < 2.0) {
+                    userMidi -= 12; // Snap Visual
+                    isHitting = true;
+                } else if (diffDown2 < 2.0) {
+                    userMidi += 24; // Snap Visual
+                    isHitting = true;
+                } else if (diffUp2 < 2.0) {
+                    userMidi -= 24; // Snap Visual
+                    isHitting = true;
+                }
+            }
+        }
         
         const y = getY(userMidi, height);
         const x = hitLineX;
 
-        // Trail effect
+        // Trail effect / Cursor
         ctx.beginPath();
         ctx.arc(x, y, 8, 0, Math.PI * 2);
-        ctx.fillStyle = '#ef4444'; // Red for user
+        ctx.fillStyle = isHitting ? '#22c55e' : '#ef4444'; // Green if hitting, Red if miss
         ctx.fill();
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = '#ef4444';
         
-        // Add particles if hitting a note
-        // (Simplified check against any note)
-        const isHitting = notes.some(n => 
-          currentTime >= n.startTime && 
-          currentTime <= n.startTime + n.duration &&
-          Math.abs(n.pitch - userMidi) < 1.5
-        );
-
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = isHitting ? '#22c55e' : '#ef4444';
+        
+        // Spawn particle if hitting
         if (isHitting) {
-            ctx.fillStyle = '#22c55e'; // Green if hitting!
-            ctx.fill();
-            ctx.shadowColor = '#22c55e';
-            
-            // Spawn particle
             if (Math.random() > 0.5) {
                 particlesRef.current.push({
                     x: x,
@@ -164,13 +254,13 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
       // Update and Draw Particles
       particlesRef.current.forEach((p, index) => {
         p.life -= 0.05;
-        p.x -= 2; // Move left with flow
-        p.y += (Math.random() - 0.5) * 2;
+        p.x -= 3; // Move left with flow (faster than before for energy)
+        p.y += (Math.random() - 0.5) * 4;
         
         ctx.globalAlpha = p.life;
         ctx.fillStyle = p.color;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
         ctx.fill();
         ctx.globalAlpha = 1.0;
 
@@ -187,7 +277,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
     return () => {
       cancelAnimationFrame(animationId);
     };
-  }, [currentTime, userPitch, notes, isPlaying]);
+  }, [currentTime, userPitch, notes, isPlaying, difficultyMode, minPitch, maxPitch, PITCH_RANGE]);
 
   return (
     <canvas 
