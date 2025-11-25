@@ -13,6 +13,7 @@ export interface SearchResult {
   // For USDB results
   id?: string; // USDB ID
   source?: 'YOUTUBE' | 'USDB';
+  txt?: string; // Optional: full USDB txt content if available from search
 }
 
 export interface SongData {

@@ -392,11 +392,22 @@ const App: React.FC = () => {
     setSongData(null);
     try {
       if (searchMode === 'USDB') {
-         if (!song.id) throw new Error("Invalid USDB ID");
-         const { txt, extraVideoId, extraCoverUrl } = await fetchUsdbContent(song.id);
+         let txt = song.txt;
+         let extraVideoId = undefined;
+         let extraCoverUrl = undefined;
+
+         // Fallback: If no TXT is provided directly by search (legacy mode or API change), fetch it.
+         if (!txt && song.id) {
+             const data = await fetchUsdbContent(song.id);
+             txt = data.txt;
+             extraVideoId = data.extraVideoId;
+             extraCoverUrl = data.extraCoverUrl;
+         }
+
          if (!txt) {
              throw new Error("Could not fetch song data. USDB entry might be private.");
          }
+         
          const parsedData = parseUltraStarTxt(txt);
          if (!parsedData.videoId && extraVideoId) parsedData.videoId = extraVideoId;
          if (!parsedData.coverUrl && extraCoverUrl) parsedData.coverUrl = extraCoverUrl;
@@ -517,7 +528,9 @@ const App: React.FC = () => {
                ) : (
                    <div className="flex flex-col items-center justify-center gap-2">
                        <Database size={48} className="text-slate-600 group-hover:text-green-500 transition-colors" />
-                       <span className="text-xs text-slate-500 uppercase font-bold tracking-widest">Click to Load</span>
+                       <span className="text-xs text-slate-500 uppercase font-bold tracking-widest">
+                           {result.txt ? 'Instant Load' : 'Click to Load'}
+                       </span>
                    </div>
                )}
                <div className="absolute bottom-2 right-2 bg-black/80 text-white text-xs px-2 py-1 rounded flex items-center gap-1">
