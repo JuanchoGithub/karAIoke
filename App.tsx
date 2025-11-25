@@ -40,6 +40,9 @@ const App: React.FC = () => {
   const userPitchRef = useRef(0);
   const processingTimeRef = useRef(0); // Profiling ref
   
+  // Track which notes were hit for lyrics coloring
+  const noteHitsRef = useRef<Set<number>>(new Set());
+  
   // Internal Score State (Real-time)
   const scoreLogicStateRef = useRef<ScoreState>({
     currentScore: 0,
@@ -243,41 +246,48 @@ const App: React.FC = () => {
     if (isVideoReady) {
         const userPitch = userPitchRef.current;
         const userMidi = frequencyToMidi(userPitch);
-        const activeNote = songData.notes.find(n => calculatedTime >= n.startTime && calculatedTime <= n.startTime + n.duration);
+        
+        // Find active note INDEX to store in hits ref
+        const activeNoteIndex = songData.notes.findIndex(n => calculatedTime >= n.startTime && calculatedTime <= n.startTime + n.duration);
+        const activeNote = activeNoteIndex !== -1 ? songData.notes[activeNoteIndex] : null;
         
         const s = scoreLogicStateRef.current;
 
         if (activeNote) {
-        if (userPitch > 0) {
-            let diff = Math.abs(userMidi - activeNote.pitch);
+            if (userPitch > 0) {
+                let diff = Math.abs(userMidi - activeNote.pitch);
 
-            // Novice Mode Tolerance
-            if (difficultyMode === 'Novice') {
-                const diffOctaveDown = Math.abs((userMidi + 12) - activeNote.pitch);
-                const diffOctaveUp = Math.abs((userMidi - 12) - activeNote.pitch);
-                const diffOctaveDown2 = Math.abs((userMidi + 24) - activeNote.pitch);
-                const diffOctaveUp2 = Math.abs((userMidi - 24) - activeNote.pitch);
-                diff = Math.min(diff, diffOctaveDown, diffOctaveUp, diffOctaveDown2, diffOctaveUp2);
-            }
-            
-            if (diff < 1.5) {
-                s.currentScore += 10 + (s.combo * 2);
-                s.combo += 1;
-                s.perfectHits += 1;
-                s.audienceMood = Math.min(100, s.audienceMood + 0.5);
-            } else if (diff < 3.0) {
-                s.currentScore += 5;
-                s.combo += 1;
-                s.goodHits += 1;
-                s.audienceMood = Math.min(100, s.audienceMood + 0.1);
+                // Novice Mode Tolerance
+                if (difficultyMode === 'Novice') {
+                    const diffOctaveDown = Math.abs((userMidi + 12) - activeNote.pitch);
+                    const diffOctaveUp = Math.abs((userMidi - 12) - activeNote.pitch);
+                    const diffOctaveDown2 = Math.abs((userMidi + 24) - activeNote.pitch);
+                    const diffOctaveUp2 = Math.abs((userMidi - 24) - activeNote.pitch);
+                    diff = Math.min(diff, diffOctaveDown, diffOctaveUp, diffOctaveDown2, diffOctaveUp2);
+                }
+                
+                if (diff < 1.5) {
+                    s.currentScore += 10 + (s.combo * 2);
+                    s.combo += 1;
+                    s.perfectHits += 1;
+                    s.audienceMood = Math.min(100, s.audienceMood + 0.5);
+                    // Mark as Hit for Lyrics
+                    noteHitsRef.current.add(activeNoteIndex);
+                } else if (diff < 3.0) {
+                    s.currentScore += 5;
+                    s.combo += 1;
+                    s.goodHits += 1;
+                    s.audienceMood = Math.min(100, s.audienceMood + 0.1);
+                    // Mark as Hit for Lyrics
+                    noteHitsRef.current.add(activeNoteIndex);
+                } else {
+                    s.combo = 0;
+                    s.misses += 1;
+                    s.audienceMood = Math.max(0, s.audienceMood - 0.2);
+                }
             } else {
-                s.combo = 0;
-                s.misses += 1;
-                s.audienceMood = Math.max(0, s.audienceMood - 0.2);
+                s.audienceMood = Math.max(0, s.audienceMood - 0.05);
             }
-        } else {
-            s.audienceMood = Math.max(0, s.audienceMood - 0.05);
-        }
         }
         s.maxCombo = Math.max(s.maxCombo, s.combo);
     }
@@ -439,6 +449,9 @@ const App: React.FC = () => {
     userPitchRef.current = 0;
     frameCountRef.current = 0;
     processingTimeRef.current = 0;
+    
+    // Clear previous hits
+    noteHitsRef.current.clear();
     
     // Reset Score logic
     scoreLogicStateRef.current = {
@@ -619,11 +632,12 @@ const App: React.FC = () => {
         </div>
 
         {/* Lyrics Display at bottom */}
-        <div className="absolute bottom-20 left-0 right-0 z-20 pointer-events-none pb-4">
+        <div className="absolute bottom-8 left-0 right-0 z-20 pointer-events-none pb-4">
            <LyricsDisplay 
                notes={songData.notes} 
                currentTimeRef={currentTimeRef} 
                isPlaying={status === GameStatus.PLAYING} 
+               noteHitsRef={noteHitsRef}
            />
         </div>
 

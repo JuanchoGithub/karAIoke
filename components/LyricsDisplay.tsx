@@ -5,16 +5,17 @@ interface LyricsDisplayProps {
   notes: Note[];
   currentTimeRef: React.MutableRefObject<number>;
   isPlaying: boolean;
+  noteHitsRef: React.MutableRefObject<Set<number>>;
 }
 
 // A "Line" is a sequence of notes that should be displayed together.
 interface KaraokeLine {
-  notes: Note[];
+  notes: { note: Note, originalIndex: number }[];
   startTime: number;
   endTime: number;
 }
 
-const LyricsDisplay: React.FC<LyricsDisplayProps> = ({ notes, currentTimeRef, isPlaying }) => {
+const LyricsDisplay: React.FC<LyricsDisplayProps> = ({ notes, currentTimeRef, isPlaying, noteHitsRef }) => {
   const [currentLine, setCurrentLine] = useState<KaraokeLine | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -25,30 +26,47 @@ const LyricsDisplay: React.FC<LyricsDisplayProps> = ({ notes, currentTimeRef, is
     if (!notes || notes.length === 0) return;
 
     const lines: KaraokeLine[] = [];
-    let currentChunk: Note[] = [];
+    let currentChunk: { note: Note, originalIndex: number }[] = [];
+    
+    // Config for "Big Ass Letters" mode
+    // We want short phrases (e.g. 3-6 words) so we can make the font huge.
+    const MAX_CHARS = 25; 
     
     notes.forEach((note, index) => {
+       // Skip technical notes without lyrics (like binders often represented as ~)
        if (!note.lyric || note.lyric.trim() === '') {
-           // Skip empty lyrics for text display purposes, but they might be rests
-           // Actually, sometimes people put empty notes for rhythm. Let's ignore for now.
+           // We still include them in the chunk for timing, but don't count length
        }
+       
+       const noteItem = { note, originalIndex: index };
 
        if (currentChunk.length === 0) {
-           currentChunk.push(note);
+           currentChunk.push(noteItem);
        } else {
-           const prevNote = currentChunk[currentChunk.length - 1];
+           const prevItem = currentChunk[currentChunk.length - 1];
+           const prevNote = prevItem.note;
            const gap = note.startTime - (prevNote.startTime + prevNote.duration);
            
-           // If gap is larger than 1.2 seconds, start new line
-           if (gap > 1.2) {
+           // Calculate current char length of the chunk
+           const currentLength = currentChunk.reduce((acc, n) => acc + (n.note.lyric?.length || 0), 0);
+           
+           // Split conditions:
+           // 1. Long silence gap (> 1.0s)
+           // 2. Line is getting too long (> 25 chars) AND we aren't in a tiny gap (don't break words if possible)
+           
+           let shouldSplit = false;
+           if (gap > 1.0) shouldSplit = true;
+           if (currentLength > MAX_CHARS) shouldSplit = true;
+
+           if (shouldSplit) {
                lines.push({
                    notes: [...currentChunk],
-                   startTime: currentChunk[0].startTime,
-                   endTime: currentChunk[currentChunk.length - 1].startTime + currentChunk[currentChunk.length - 1].duration
+                   startTime: currentChunk[0].note.startTime,
+                   endTime: currentChunk[currentChunk.length - 1].note.startTime + currentChunk[currentChunk.length - 1].note.duration
                });
-               currentChunk = [note];
+               currentChunk = [noteItem];
            } else {
-               currentChunk.push(note);
+               currentChunk.push(noteItem);
            }
        }
     });
@@ -57,8 +75,8 @@ const LyricsDisplay: React.FC<LyricsDisplayProps> = ({ notes, currentTimeRef, is
     if (currentChunk.length > 0) {
         lines.push({
             notes: [...currentChunk],
-            startTime: currentChunk[0].startTime,
-            endTime: currentChunk[currentChunk.length - 1].startTime + currentChunk[currentChunk.length - 1].duration
+            startTime: currentChunk[0].note.startTime,
+            endTime: currentChunk[currentChunk.length - 1].note.startTime + currentChunk[currentChunk.length - 1].note.duration
         });
     }
 
@@ -74,44 +92,47 @@ const LyricsDisplay: React.FC<LyricsDisplayProps> = ({ notes, currentTimeRef, is
         const time = currentTimeRef.current;
         
         // 1. Determine Current Line
-        // Show line if time is within [startTime - 1s, endTime + 1s]
+        // Show line slightly earlier (-0.5s) so the user can read ahead, stay until finished (+0.5s)
         const activeLine = linesRef.current.find(line => 
-            time >= line.startTime - 2.0 && time <= line.endTime + 1.0
+            time >= line.startTime - 1.5 && time <= line.endTime + 1.0
         );
-
-        // React State update only if line changes (coarse update)
-        // To avoid flickering, we only set it if it's different
-        // We cheat a bit: we use a ref for the current rendered line index to avoid scanning the array every frame if we can
-        // But scanning 100 lines is fast enough.
         
-        // However, updating the DOM for highlighting needs to be done via Refs if we want 60fps without React Renders.
-        // OR we just use CSS variables?
-        // Let's use direct DOM manipulation for the "active" class on spans.
-        
+        // Direct DOM manipulation for high performance highlighting
         if (containerRef.current) {
             const spans = containerRef.current.querySelectorAll('span');
             spans.forEach((span) => {
                 const start = parseFloat(span.dataset.start || '0');
                 const duration = parseFloat(span.dataset.duration || '0');
+                const index = parseInt(span.dataset.index || '-1');
+                const end = start + duration;
                 
-                if (time >= start + duration) {
-                    span.style.color = '#3b82f6'; // Blue (Passed)
+                const isHit = noteHitsRef.current.has(index);
+
+                // Karaoke Logic
+                if (time >= end) {
+                    // Passed
+                    // If Hit -> Green, If Miss -> Gray/Slate
+                    span.style.color = isHit ? '#4ade80' : '#475569'; 
                     span.style.transform = 'scale(1)';
+                    span.style.opacity = isHit ? '1' : '0.6';
+                    span.style.textShadow = '0 0 0 transparent';
                 } else if (time >= start) {
-                    span.style.color = '#60a5fa'; // Light Blue (Singing now)
-                    span.style.transform = 'scale(1.1)';
-                    span.style.textShadow = '0 0 10px rgba(96, 165, 250, 0.8)';
+                    // Active (Singing Now)
+                    span.style.color = '#fbbf24'; // Amber/Gold for active
+                    span.style.transform = 'scale(1.15) translateY(-5px)';
+                    span.style.opacity = '1';
+                    span.style.textShadow = '0 0 20px rgba(251, 191, 36, 0.8), 2px 2px 0px rgba(0,0,0,0.5)';
                 } else {
-                    span.style.color = 'white'; // White (Future)
+                    // Future
+                    span.style.color = 'white';
                     span.style.transform = 'scale(1)';
-                    span.style.textShadow = 'none';
+                    span.style.opacity = '0.9';
+                    span.style.textShadow = '2px 2px 4px rgba(0,0,0,0.8)';
                 }
             });
         }
         
-        // Only trigger react re-render if the LINE ITSELF changes (text content change)
-        // We use a functional update to check previous state inside the setter or just ref comparison?
-        // Since activeLine is an object reference from linesRef, direct comparison works.
+        // React State update only if line changes object reference
         setCurrentLine(prev => (prev === activeLine ? prev : (activeLine || null)));
 
         animId = requestAnimationFrame(update);
@@ -121,22 +142,30 @@ const LyricsDisplay: React.FC<LyricsDisplayProps> = ({ notes, currentTimeRef, is
         animId = requestAnimationFrame(update);
     }
     return () => cancelAnimationFrame(animId);
-  }, [isPlaying, currentTimeRef]);
+  }, [isPlaying, currentTimeRef, noteHitsRef]);
 
   if (!currentLine) return null;
 
   return (
-    <div className="flex flex-col items-center justify-center w-full px-8 text-center animate-fade-in">
-        <div ref={containerRef} className="flex flex-wrap justify-center gap-x-3 gap-y-1">
-            {currentLine.notes.map((note, i) => (
+    <div className="flex flex-col items-center justify-end w-full px-4 text-center animate-fade-in pointer-events-none">
+        <div 
+          ref={containerRef} 
+          className="flex flex-wrap justify-center items-baseline gap-x-2 gap-y-2 max-w-5xl mx-auto transition-all duration-300"
+        >
+            {currentLine.notes.map((item, i) => (
                 <span 
                     key={i}
-                    data-start={note.startTime}
-                    data-duration={note.duration}
-                    className="text-4xl sm:text-5xl font-bold transition-all duration-75 inline-block"
-                    style={{ color: 'white' }}
+                    data-start={item.note.startTime}
+                    data-duration={item.note.duration}
+                    data-index={item.originalIndex}
+                    className="text-5xl md:text-7xl font-black tracking-tight leading-tight transition-all duration-100 ease-out"
+                    style={{ 
+                        color: 'white',
+                        fontFamily: '"Inter", sans-serif',
+                        WebkitTextStroke: '2px rgba(0,0,0,0.3)' // Subtle outline for contrast
+                    }}
                 >
-                    {note.lyric}
+                    {item.note.lyric}
                 </span>
             ))}
         </div>
