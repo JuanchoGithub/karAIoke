@@ -6,6 +6,7 @@ import { autoCorrelate, frequencyToMidi } from './services/audioAnalysis';
 import { searchUsdb, fetchUsdbContent } from './services/usdbService';
 import { parseUltraStarTxt } from './services/ultraStarParser';
 import PitchVisualizer from './components/PitchVisualizer';
+import LyricsDisplay from './components/LyricsDisplay';
 import AudienceMeter from './components/AudienceMeter';
 
 // Declare YouTube API types
@@ -587,6 +588,15 @@ const App: React.FC = () => {
               isPlaying={status === GameStatus.PLAYING}
               difficultyMode={difficultyMode}
               processingTimeMs={processingTimeRef.current}
+           />
+        </div>
+
+        {/* Lyrics Display at bottom */}
+        <div className="absolute bottom-20 left-0 right-0 z-20 pointer-events-none pb-4">
+           <LyricsDisplay 
+               notes={songData.notes} 
+               currentTimeRef={currentTimeRef} 
+               isPlaying={status === GameStatus.PLAYING} 
            />
         </div>
 

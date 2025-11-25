@@ -72,7 +72,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
 
   const PITCH_RANGE = maxPitch - minPitch;
   const VISIBLE_WINDOW = 4; // seconds visible on screen
-  const NOTE_HEIGHT = 16;   // Slightly thicker notes
+  const NOTE_HEIGHT = 28;   // Thicker notes for readability
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -137,8 +137,8 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
         const isC = i % 12 === 0;
         
         if (PITCH_RANGE < 30 || isC || i % 12 === 5) {
-             ctx.moveTo(0, y);
-             ctx.lineTo(width, y);
+             ctx.moveTo(0, y + NOTE_HEIGHT/2);
+             ctx.lineTo(width, y + NOTE_HEIGHT/2);
         }
       }
       ctx.stroke();
@@ -150,11 +150,11 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
       for (let i = startPitch; i <= endPitch; i++) {
          if (i % 12 === 0) {
             const y = getY(i);
-            ctx.moveTo(0, y);
-            ctx.lineTo(width, y);
+            ctx.moveTo(0, y + NOTE_HEIGHT/2);
+            ctx.lineTo(width, y + NOTE_HEIGHT/2);
             ctx.fillStyle = 'rgba(148, 163, 184, 0.5)';
             ctx.font = '10px Inter';
-            ctx.fillText(midiToNoteName(i), 5, y - 2);
+            ctx.fillText(midiToNoteName(i), 5, y + NOTE_HEIGHT/2 - 2);
          }
       }
       ctx.stroke();
@@ -197,18 +197,24 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
 
         // Rounded rect look
         ctx.beginPath();
-        ctx.roundRect(x, y, Math.max(w, 4), NOTE_HEIGHT, 4);
+        ctx.roundRect(x, y, Math.max(w, 4), NOTE_HEIGHT, 6);
         ctx.fill();
         ctx.shadowBlur = 0; // reset
 
         // Lyrics
         if (note.lyric) {
-            ctx.fillStyle = isActive ? '#fff' : '#cbd5e1';
-            ctx.font = isActive ? 'bold 14px Inter' : 'bold 12px Inter';
+            ctx.fillStyle = isActive ? '#ffffff' : '#cbd5e1';
+            // Increase font size significantly
+            ctx.font = isActive ? 'bold 20px Inter' : 'bold 16px Inter';
             const textWidth = ctx.measureText(note.lyric).width;
-            // Center lyric if note is small, or left align if long
-            const textX = w > textWidth ? x + (w - textWidth) / 2 : x;
-            ctx.fillText(note.lyric, textX, y - 8);
+            
+            // Text positioning
+            // If the note is very short, draw text centered but potentially overflowing nicely
+            const centerX = x + (Math.max(w, 4) / 2);
+            const textX = centerX - (textWidth / 2);
+            const textY = y + (NOTE_HEIGHT / 2) + 6; // Vertically center in the thicker bar
+
+            ctx.fillText(note.lyric, textX, textY);
         }
       });
 
@@ -257,7 +263,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
 
       // --- 5. Draw Pitch Trail ---
       if (pitchHistoryRef.current.length > 1) {
-          ctx.lineWidth = 3;
+          ctx.lineWidth = 4; // Thicker trail
           ctx.lineCap = 'round';
           ctx.lineJoin = 'round';
           
@@ -269,14 +275,14 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
               if (p2.time - p1.time > 0.1) continue;
 
               const x1 = getX(p1.time);
-              const y1 = getY(p1.midi);
+              const y1 = getY(p1.midi) + NOTE_HEIGHT/2;
               const x2 = getX(p2.time);
-              const y2 = getY(p2.midi);
+              const y2 = getY(p2.midi) + NOTE_HEIGHT/2;
 
               ctx.beginPath();
               ctx.strokeStyle = p2.isHitting ? 'rgba(74, 222, 128, 0.8)' : 'rgba(148, 163, 184, 0.5)';
-              ctx.moveTo(x1, y1 + NOTE_HEIGHT/2); // Center of note height
-              ctx.lineTo(x2, y2 + NOTE_HEIGHT/2);
+              ctx.moveTo(x1, y1); 
+              ctx.lineTo(x2, y2);
               ctx.stroke();
           }
       }
