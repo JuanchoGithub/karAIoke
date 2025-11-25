@@ -1,0 +1,7 @@
+{
+  "name": "KaraokeGenius",
+  "description": "An AI-powered karaoke game. Search for a song, get a generated note chart, and sing along! Features real-time pitch detection and scoring.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
