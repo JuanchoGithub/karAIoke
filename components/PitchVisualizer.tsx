@@ -50,7 +50,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
 
   const PITCH_RANGE = maxPitch - minPitch;
   const VISIBLE_WINDOW = 4; // seconds visible on screen
-  const NOTE_HEIGHT = 10;
+  const NOTE_HEIGHT = 12;
 
   // Helper to map pitch to Y coordinate (inverted because canvas Y=0 is top)
   const getY = (midiPitch: number, height: number) => {
@@ -79,16 +79,28 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
     let animationId: number;
 
     const render = () => {
-      // Resize handling
-      if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) {
-        canvas.width = canvas.clientWidth;
-        canvas.height = canvas.clientHeight;
+      // High DPI Handling
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      
+      // Scale canvas resolution to match screen density
+      const targetWidth = Math.floor(rect.width * dpr);
+      const targetHeight = Math.floor(rect.height * dpr);
+
+      if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
       }
       
-      const width = canvas.width;
-      const height = canvas.height;
+      // Reset transform to identity, then scale by DPR
+      // This allows us to draw using Logical Pixels (rect.width/height)
+      // but have sharp results on Retina screens.
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      // Clear
+      const width = rect.width;
+      const height = rect.height;
+
+      // Clear using logical dimensions
       ctx.clearRect(0, 0, width, height);
 
       // Draw Background Grid (Pitch Lines)
@@ -159,17 +171,23 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
         
         ctx.fillStyle = isActive ? '#3b82f6' : '#64748b'; // Blue active, Slate inactive
         ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1.5;
         
         // Draw Rounded Rect
         ctx.beginPath();
-        ctx.roundRect(x, y, w, NOTE_HEIGHT, 4);
+        // Fallback for browsers without roundRect if needed, but modern browsers support it
+        if (ctx.roundRect) {
+            ctx.roundRect(x, y, w, NOTE_HEIGHT, 4);
+        } else {
+            ctx.rect(x, y, w, NOTE_HEIGHT);
+        }
         ctx.fill();
         ctx.stroke();
 
         // Draw Lyric
         if (note.lyric) {
             ctx.fillStyle = '#fff';
-            ctx.font = 'bold 14px Inter';
+            ctx.font = 'bold 12px Inter';
             // Prevent lyric overlap if zooming
             ctx.fillText(note.lyric, x, y - 8);
         }
@@ -283,6 +301,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
     <canvas 
       ref={canvasRef} 
       className="w-full h-full block"
+      style={{ touchAction: 'none' }}
     />
   );
 };

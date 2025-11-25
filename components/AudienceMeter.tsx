@@ -32,7 +32,7 @@ const AudienceMeter: React.FC<AudienceMeterProps> = ({ mood, combo }) => {
     <div className="bg-slate-800/80 p-4 rounded-xl border border-slate-700 backdrop-blur-md flex flex-col gap-2 w-48 shadow-lg">
       <div className="flex justify-between items-center">
         <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Crowd</span>
-        <span className={`text-xs font-bold ${mood > 70 ? 'text-purple-400' : 'text-slate-400'}`}>{mood}%</span>
+        <span className={`text-xs font-bold ${mood > 70 ? 'text-purple-400' : 'text-slate-400'}`}>{Math.round(mood)}%</span>
       </div>
       
       {/* Meter Bar */}

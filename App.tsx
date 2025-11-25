@@ -43,7 +43,7 @@ const App: React.FC = () => {
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const microphoneRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const requestRef = useRef<number>();
+  const requestRef = useRef<number | null>(null);
   const startTimeRef = useRef<number>(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -51,7 +51,15 @@ const App: React.FC = () => {
   const startMicrophone = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({
+        latencyHint: 'interactive'
+      });
+      
+      // Ensure context is running (required by some browsers)
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
+      }
+
       analyserRef.current = audioContextRef.current.createAnalyser();
       analyserRef.current.fftSize = 2048;
       
