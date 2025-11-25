@@ -60,6 +60,7 @@ const App: React.FC = () => {
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const microphoneRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
   // Re-use buffer to prevent GC lag
   const audioBufferRef = useRef<Float32Array | null>(null);
 
@@ -74,6 +75,8 @@ const App: React.FC = () => {
   const startMicrophone = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({
         latencyHint: 'interactive',
         sampleRate: 48000 // Force consistent sample rate if possible
@@ -102,16 +105,40 @@ const App: React.FC = () => {
     }
   };
 
-  const stopMicrophone = () => {
+  const stopMicrophone = useCallback(() => {
+    // 1. Stop the physical microphone stream (removes red dot)
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop());
+      mediaStreamRef.current = null;
+    }
+
+    // 2. Disconnect nodes
     if (microphoneRef.current) {
       microphoneRef.current.disconnect();
+      microphoneRef.current = null;
     }
+    
+    if (analyserRef.current) {
+        analyserRef.current.disconnect();
+        analyserRef.current = null;
+    }
+
+    // 3. Close AudioContext
     if (audioContextRef.current) {
       audioContextRef.current.close();
+      audioContextRef.current = null;
     }
+    
     audioBufferRef.current = null;
     setIsMicReady(false);
-  };
+  }, []);
+
+  // Cleanup on unmount to ensure mic is released
+  useEffect(() => {
+      return () => {
+          stopMicrophone();
+      };
+  }, [stopMicrophone]);
 
   // --- YouTube Player Logic ---
   const loadYouTubeApi = useCallback(() => {
