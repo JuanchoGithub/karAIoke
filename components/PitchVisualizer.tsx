@@ -53,36 +53,37 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d', { alpha: false }); // Optimize for no transparency on bg
+    // CRITICAL FIX: alpha: true allows the video background to show through the canvas
+    const ctx = canvas.getContext('2d', { alpha: true }); 
     if (!ctx) return;
 
     let animationId: number;
 
     const render = () => {
-      // Read directly from refs to avoid React state overhead
       const currentTime = currentTimeRef.current;
       const userPitch = userPitchRef.current;
 
-      // High DPI Handling
+      // Optimization: Access clientWidth/Height which causes less layout thrashing than getBoundingClientRect
       const dpr = window.devicePixelRatio || 1;
-      const rect = canvas.getBoundingClientRect();
+      const displayWidth = canvas.clientWidth;
+      const displayHeight = canvas.clientHeight;
       
-      const targetWidth = Math.floor(rect.width * dpr);
-      const targetHeight = Math.floor(rect.height * dpr);
+      const targetWidth = Math.floor(displayWidth * dpr);
+      const targetHeight = Math.floor(displayHeight * dpr);
 
+      // Only resize buffer if dimensions change
       if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
         canvas.width = targetWidth;
         canvas.height = targetHeight;
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       } else {
-        // Just reset transform if size didn't change
+        // Reset transform if not resizing, to ensure scale is correct for this frame
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
 
-      const width = rect.width;
-      const height = rect.height;
+      const width = displayWidth;
+      const height = displayHeight;
 
-      // Helpers inside render to access closure variables without recalculating everything
       const getY = (midiPitch: number) => {
         const normalized = (midiPitch - minPitch) / PITCH_RANGE;
         return height - (normalized * height) - (NOTE_HEIGHT / 2);
@@ -95,11 +96,11 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
         return hitLineX + (timeDiff * pixelsPerSecond);
       };
 
-      // Clear using logical dimensions (optimization: fillRect is sometimes faster than clearRect if we redraw full bg)
+      // Clear the canvas to be transparent
       ctx.clearRect(0, 0, width, height);
 
       // Draw Background Grid (Pitch Lines)
-      ctx.strokeStyle = '#334155';
+      ctx.strokeStyle = 'rgba(51, 65, 85, 0.5)'; // Transparent slate
       ctx.lineWidth = 1;
       
       const startPitch = Math.floor(minPitch);
@@ -111,7 +112,6 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
         const y = getY(i);
         const isC = i % 12 === 0;
         
-        // Skip semi-tones if zoomed out too far, keep Cs and Fs
         if (PITCH_RANGE < 30 || isC || i % 12 === 5) {
              ctx.moveTo(0, y);
              ctx.lineTo(width, y);
@@ -121,7 +121,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
 
       // Highlight Octaves
       ctx.beginPath();
-      ctx.strokeStyle = '#475569';
+      ctx.strokeStyle = 'rgba(71, 85, 105, 0.8)';
       ctx.lineWidth = 2;
       for (let i = startPitch; i <= endPitch; i++) {
          if (i % 12 === 0) {
@@ -129,7 +129,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
             ctx.moveTo(0, y);
             ctx.lineTo(width, y);
             // Draw Label
-            ctx.fillStyle = '#475569';
+            ctx.fillStyle = '#94a3b8';
             ctx.font = '10px Inter';
             ctx.fillText(midiToNoteName(i), 5, y - 2);
          }
@@ -146,8 +146,6 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
       ctx.stroke();
 
       // Find active notes
-      // Optimization: Loop once over notes to find active ones and draw
-      // Since notes are sorted by time usually, we can optimize. But simple filter is ok for <1000 notes.
       let activeNotes: Note[] = [];
 
       notes.forEach(note => {
@@ -156,7 +154,6 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
           return;
         }
 
-        // Check if active for later use
         if (currentTime >= note.startTime && currentTime <= note.startTime + note.duration) {
             activeNotes.push(note);
         }
@@ -164,7 +161,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
         const x = getX(note.startTime);
         const w = (note.duration * (width / VISIBLE_WINDOW));
         const y = getY(note.pitch);
-
+        
         const isActive = currentTime >= note.startTime && currentTime <= note.startTime + note.duration;
         
         ctx.fillStyle = isActive ? '#3b82f6' : '#64748b';
@@ -209,7 +206,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
             } else if (difficultyMode === 'Novice') {
                 const diffDown = Math.abs((userMidi + 12) - closestNote.pitch);
                 const diffUp = Math.abs((userMidi - 12) - closestNote.pitch);
-                const diffDown2 = Math.abs((userMidi + 24) - closestNote.pitch); // Deep voice
+                const diffDown2 = Math.abs((userMidi + 24) - closestNote.pitch); 
                 const diffUp2 = Math.abs((userMidi - 24) - closestNote.pitch);
 
                 if (diffDown < 2.0) { userMidi += 12; isHitting = true; }
@@ -227,34 +224,35 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
         ctx.fillStyle = isHitting ? '#22c55e' : '#ef4444'; 
         ctx.fill();
         
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = isHitting ? '#22c55e' : '#ef4444';
+        // PERFORMANCE FIX: Removed shadowBlur. It causes massive lag on many devices.
+        // ctx.shadowBlur = 10;
         
         if (isHitting && Math.random() > 0.5) {
             particlesRef.current.push({ x, y, life: 1.0, color: '#22c55e' });
         }
       }
-      ctx.shadowBlur = 0;
 
       // Draw Particles
-      for (let i = particlesRef.current.length - 1; i >= 0; i--) {
-        const p = particlesRef.current[i];
-        p.life -= 0.05;
-        p.x -= 3;
-        p.y += (Math.random() - 0.5) * 4;
-        
-        if (p.life <= 0) {
-            particlesRef.current.splice(i, 1);
-            continue;
-        }
+      if (particlesRef.current.length > 0) {
+        for (let i = particlesRef.current.length - 1; i >= 0; i--) {
+            const p = particlesRef.current[i];
+            p.life -= 0.05;
+            p.x -= 3;
+            p.y += (Math.random() - 0.5) * 4;
+            
+            if (p.life <= 0) {
+                particlesRef.current.splice(i, 1);
+                continue;
+            }
 
-        ctx.globalAlpha = p.life;
-        ctx.fillStyle = p.color;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-        ctx.fill();
+            ctx.globalAlpha = p.life;
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1.0;
       }
-      ctx.globalAlpha = 1.0;
 
       if (isPlaying) {
         animationId = requestAnimationFrame(render);
@@ -268,7 +266,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = React.memo(({
     return () => {
       cancelAnimationFrame(animationId);
     };
-  }, [notes, isPlaying, difficultyMode, minPitch, maxPitch, PITCH_RANGE]); // Removed currentTimeRef/userPitchRef from deps as they are refs
+  }, [notes, isPlaying, difficultyMode, minPitch, maxPitch, PITCH_RANGE]); 
 
   return (
     <canvas 

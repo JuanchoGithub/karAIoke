@@ -51,6 +51,9 @@ const App: React.FC = () => {
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const microphoneRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  // Re-use buffer to prevent GC lag
+  const audioBufferRef = useRef<Float32Array | null>(null);
+
   const requestRef = useRef<number | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const frameCountRef = useRef(0);
@@ -75,6 +78,9 @@ const App: React.FC = () => {
       microphoneRef.current = audioContextRef.current.createMediaStreamSource(stream);
       microphoneRef.current.connect(analyserRef.current);
       
+      // Initialize buffer once
+      audioBufferRef.current = new Float32Array(analyserRef.current.fftSize);
+
       setIsMicReady(true);
       return true;
     } catch (err) {
@@ -91,6 +97,7 @@ const App: React.FC = () => {
     if (audioContextRef.current) {
       audioContextRef.current.close();
     }
+    audioBufferRef.current = null;
     setIsMicReady(false);
   };
 
@@ -109,8 +116,11 @@ const App: React.FC = () => {
 
     // 2. Update Pitch
     if (analyserRef.current && audioContextRef.current) {
-        const bufferLength = analyserRef.current.fftSize;
-        const buffer = new Float32Array(bufferLength);
+        // PERFORMANCE: Re-use the existing Float32Array
+        if (!audioBufferRef.current) {
+             audioBufferRef.current = new Float32Array(analyserRef.current.fftSize);
+        }
+        const buffer = audioBufferRef.current;
         analyserRef.current.getFloatTimeDomainData(buffer);
         
         // Optimized autoCorrelate is called here
